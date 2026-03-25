@@ -5,7 +5,7 @@ from duckduckgo_search import DDGS
 
 app = Flask(__name__)
 
-# --- FIX 1: Ensure Burmese/Unicode characters are displayed correctly ---
+# --- FIX: Ensure Burmese/Unicode characters are displayed correctly ---
 app.config['JSON_AS_ASCII'] = False
 app.config['JSONIFY_MIMETYPE'] = 'application/json; charset=utf-8'
 
@@ -41,40 +41,43 @@ def get_ai_response(messages, max_tokens=100):
     return response.json()
 
 def get_web_context(query):
-    """Searches DuckDuckGo and returns clean list (no links) and text context."""
+    """Searches DuckDuckGo with region settings to improve results."""
     raw_results = []
     context_text = ""
     
     try:
         with DDGS() as ddgs:
-            # Using simpler keywords search for better reliability
-            # Removed 'backend="news"' to improve general search success rate
-            results = list(ddgs.text(query, max_results=5))
+            # IMPROVEMENT: Added region='mm' (Myanmar) and safesearch off
+            # This helps find Burmese content and avoids some filtering issues
+            results = list(ddgs.text(
+                query, 
+                max_results=5,
+                region='mm', 
+                safesearch='off'
+            ))
 
             if results:
                 context_text += "--- SEARCH RESULTS ---\n"
                 for r in results:
                     title = r.get('title', 'No Title')
                     body = r.get('body', 'No Description')
-                    link = r.get('href', '') # Keep link for internal context if needed
 
-                    # Add to context text for AI
                     context_text += f"Title: {title}\nDetails: {body}\n\n"
                     
-                    # FIX 2: Add only Title and Snippet to the visible API response
                     raw_results.append({
                         "title": title,
                         "snippet": body
                     })
-
-        if not results:
-            return [], "No web results found."
-            
-        return raw_results, context_text.strip()
+                
+                return raw_results, context_text.strip()
+            else:
+                # If results list is empty, return None to indicate failure
+                print("DDGS returned empty list (Possible Rate Limit or Blocking)")
+                return None, None
 
     except Exception as e:
-        print(f"Search Error: {e}")
-        return [], "Failed to retrieve web search results."
+        print(f"Search Exception: {e}")
+        return None, None
 
 @app.route('/chat', methods=['GET', 'POST'])
 def chat():
@@ -114,6 +117,16 @@ def chat():
                 print("Step 3: Searching DuckDuckGo...")
                 found_web_results, search_results = get_web_context(generated_query)
 
+                # STRICT CHECK: If search failed/empty, stop or inform user
+                if not found_web_results:
+                    print("Search returned no data.")
+                    return jsonify({
+                        "status": "error",
+                        "error": "Web Search Failed",
+                        "details": "The search engine did not return any results. This might be due to network restrictions or rate limiting on the server.",
+                        "search_query_used": search_query_used
+                    })
+
                 final_user_content = (
                     f"User Question: {user_prompt}\n\n"
                     f"Here are the web search results for '{generated_query}':\n"
@@ -121,7 +134,7 @@ def chat():
                     f"Please answer the User Question using the details provided above."
                 )
             else:
-                print("Failed to generate query, proceeding without search.")
+                print("Failed to generate query.")
 
         except Exception as e:
             print(f"Error during smart search: {e}")
