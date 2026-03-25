@@ -5,8 +5,9 @@ from duckduckgo_search import DDGS
 
 app = Flask(__name__)
 
-# --- FIX: Display Burmese/Unicode characters correctly ---
+# --- FIX 1: Ensure Burmese/Unicode characters are displayed correctly ---
 app.config['JSON_AS_ASCII'] = False
+app.config['JSONIFY_MIMETYPE'] = 'application/json; charset=utf-8'
 
 # --- Configuration ---
 INVOKE_URL = 'https://integrate.api.nvidia.com/v1/chat/completions'
@@ -40,55 +41,33 @@ def get_ai_response(messages, max_tokens=100):
     return response.json()
 
 def get_web_context(query):
-    """Searches DuckDuckGo (Text + News) and returns both raw list and formatted text."""
+    """Searches DuckDuckGo and returns clean list (no links) and text context."""
     raw_results = []
     context_text = ""
     
     try:
         with DDGS() as ddgs:
-            # 1. Search Standard Text Results
-            text_results = list(ddgs.text(query, max_results=3))
-            
-            # 2. Search News Results for fresh info
-            news_results = list(ddgs.news(query, max_results=3))
+            # Using simpler keywords search for better reliability
+            # Removed 'backend="news"' to improve general search success rate
+            results = list(ddgs.text(query, max_results=5))
 
-            # Process Text Results
-            if text_results:
-                context_text += "--- WEB RESULTS ---\n"
-                for r in text_results:
-                    context_text += (
-                        f"Title: {r['title']}\n"
-                        f"Source: {r['href']}\n" 
-                        f"Details: {r['body']}\n\n"
-                    )
-                    # Add to raw list for API response
+            if results:
+                context_text += "--- SEARCH RESULTS ---\n"
+                for r in results:
+                    title = r.get('title', 'No Title')
+                    body = r.get('body', 'No Description')
+                    link = r.get('href', '') # Keep link for internal context if needed
+
+                    # Add to context text for AI
+                    context_text += f"Title: {title}\nDetails: {body}\n\n"
+                    
+                    # FIX 2: Add only Title and Snippet to the visible API response
                     raw_results.append({
-                        "type": "web",
-                        "title": r['title'],
-                        "link": r['href'],
-                        "snippet": r['body']
-                    })
-            
-            # Process News Results
-            if news_results:
-                context_text += "--- NEWS RESULTS ---\n"
-                for r in news_results:
-                    context_text += (
-                        f"Title: {r['title']}\n"
-                        f"Source: {r['url']}\n"
-                        f"Date: {r.get('date', 'N/A')}\n"
-                        f"Details: {r['body']}\n\n"
-                    )
-                    # Add to raw list for API response
-                    raw_results.append({
-                        "type": "news",
-                        "title": r['title'],
-                        "link": r['url'],
-                        "date": r.get('date', 'N/A'),
-                        "snippet": r['body']
+                        "title": title,
+                        "snippet": body
                     })
 
-        if not context_text:
+        if not results:
             return [], "No web results found."
             
         return raw_results, context_text.strip()
@@ -113,13 +92,11 @@ def chat():
 
     final_user_content = user_prompt
     search_query_used = None
-    # Initialize list to show user what was found
     found_web_results = [] 
 
     # --- SMART WEB SEARCH LOGIC ---
     if web_search:
         try:
-            # Step A: Ask AI to generate a search query
             print("Step 1: Generating search query...")
             query_gen_messages = [
                 {"role": "system", "content": "You are a search query generator. Analyze the user's question and output ONLY the best search keywords to find the answer. Do not output anything else."},
@@ -134,12 +111,9 @@ def chat():
                 search_query_used = generated_query
                 print(f"Step 2: AI generated query -> {generated_query}")
 
-                # Step B: Perform Web Search
                 print("Step 3: Searching DuckDuckGo...")
-                # Unpack both raw list and context text
                 found_web_results, search_results = get_web_context(generated_query)
 
-                # Step C: Construct Final Prompt
                 final_user_content = (
                     f"User Question: {user_prompt}\n\n"
                     f"Here are the web search results for '{generated_query}':\n"
@@ -196,7 +170,6 @@ def chat():
                 "status": "success",
                 "web_search_enabled": web_search,
                 "search_query_used": search_query_used,
-                # NEW: Show the actual results found here
                 "web_search_results": found_web_results, 
                 "response": {
                     "Model": "M.H.M Ai",
