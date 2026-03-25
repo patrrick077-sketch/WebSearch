@@ -29,7 +29,7 @@ def get_ai_response(messages, max_tokens=100):
     payload = {
         "model": "z-ai/glm5",
         "messages": messages,
-        "temperature": 0.5, # Lower temp for better logic
+        "temperature": 0.5, 
         "top_p": 1,
         "max_tokens": max_tokens,
         "stream": False,
@@ -40,17 +40,43 @@ def get_ai_response(messages, max_tokens=100):
     return response.json()
 
 def get_web_context(query):
-    """Searches DuckDuckGo and returns context."""
+    """Searches DuckDuckGo (Text + News) and returns detailed context."""
     try:
+        context_text = ""
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
-            if not results:
-                return "No web results found."
+            # 1. Search Standard Text Results
+            text_results = list(ddgs.text(query, max_results=3))
             
-            context_text = ""
-            for r in results:
-                context_text += f"Title: {r['title']}\nSnippet: {r['body']}\n\n"
-            return context_text.strip()
+            # 2. Search News Results for fresh info
+            news_results = list(ddgs.news(query, max_results=3))
+
+            # Process Text Results
+            if text_results:
+                context_text += "--- WEB RESULTS ---\n"
+                for r in text_results:
+                    # Including Title, Full Body(Snippet), and Link
+                    context_text += (
+                        f"Title: {r['title']}\n"
+                        f"Source: {r['href']}\n" 
+                        f"Details: {r['body']}\n\n"
+                    )
+            
+            # Process News Results
+            if news_results:
+                context_text += "--- NEWS RESULTS ---\n"
+                for r in news_results:
+                    context_text += (
+                        f"Title: {r['title']}\n"
+                        f"Source: {r['url']}\n"
+                        f"Date: {r.get('date', 'N/A')}\n"
+                        f"Details: {r['body']}\n\n"
+                    )
+
+        if not context_text:
+            return "No web results found."
+            
+        return context_text.strip()
+
     except Exception as e:
         print(f"Search Error: {e}")
         return "Failed to retrieve web search results."
@@ -82,37 +108,35 @@ def chat():
                 {"role": "user", "content": user_prompt}
             ]
             
-            # Use a small token limit since the response is just keywords
             gen_data = get_ai_response(query_gen_messages, max_tokens=20)
             
             if 'choices' in gen_data and gen_data['choices']:
                 generated_query = gen_data['choices'][0]['message']['content'].strip()
-                # Clean up potential quotes or extra text
                 generated_query = generated_query.replace('"', '').split('\n')[0]
                 search_query_used = generated_query
                 print(f"Step 2: AI generated query -> {generated_query}")
 
-                # Step B: Perform Web Search using AI's query
-                print("Step 3: Searching DuckDuckGo...")
+                # Step B: Perform Web Search (Now includes News + Details)
+                print("Step 3: Searching DuckDuckGo (Text + News)...")
                 search_results = get_web_context(generated_query)
 
-                # Step C: Construct Final Prompt with Context
+                # Step C: Construct Final Prompt
                 final_user_content = (
                     f"User Question: {user_prompt}\n\n"
                     f"Here are the web search results for '{generated_query}':\n"
                     f"{search_results}\n\n"
-                    f"Please answer the User Question using the information above."
+                    f"Please answer the User Question using the details provided above. "
+                    f"If sources are provided, mention them if relevant."
                 )
             else:
                 print("Failed to generate query, proceeding without search.")
 
         except Exception as e:
             print(f"Error during smart search: {e}")
-            # If search fails, continue with normal prompt
 
     # --- MAIN AI CALL ---
     try:
-        start_time = time.time() # Start timer
+        start_time = time.time()
         
         payload = {
             "model": "z-ai/glm5",
@@ -131,13 +155,12 @@ def chat():
         }
 
         response = requests.post(INVOKE_URL, headers=HEADERS, json=payload)
-        end_time = time.time()   # End timer
+        end_time = time.time()
         
         response.raise_for_status()
         
         response_data = response.json()
 
-        # Extract Usage Stats & Calculate Speed
         usage = response_data.get('usage', {})
         completion_tokens = usage.get('completion_tokens', 0)
         prompt_tokens = usage.get('prompt_tokens', 0)
@@ -154,7 +177,7 @@ def chat():
             return jsonify({
                 "status": "success",
                 "web_search_enabled": web_search,
-                "search_query_used": search_query_used, # Show what the AI searched for
+                "search_query_used": search_query_used,
                 "response": {
                     "Model": "M.H.M Ai",
                     "Response": ai_message
