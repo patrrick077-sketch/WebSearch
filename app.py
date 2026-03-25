@@ -40,9 +40,11 @@ def get_ai_response(messages, max_tokens=100):
     return response.json()
 
 def get_web_context(query):
-    """Searches DuckDuckGo (Text + News) and returns detailed context."""
+    """Searches DuckDuckGo (Text + News) and returns both raw list and formatted text."""
+    raw_results = []
+    context_text = ""
+    
     try:
-        context_text = ""
         with DDGS() as ddgs:
             # 1. Search Standard Text Results
             text_results = list(ddgs.text(query, max_results=3))
@@ -54,12 +56,18 @@ def get_web_context(query):
             if text_results:
                 context_text += "--- WEB RESULTS ---\n"
                 for r in text_results:
-                    # Including Title, Full Body(Snippet), and Link
                     context_text += (
                         f"Title: {r['title']}\n"
                         f"Source: {r['href']}\n" 
                         f"Details: {r['body']}\n\n"
                     )
+                    # Add to raw list for API response
+                    raw_results.append({
+                        "type": "web",
+                        "title": r['title'],
+                        "link": r['href'],
+                        "snippet": r['body']
+                    })
             
             # Process News Results
             if news_results:
@@ -71,15 +79,23 @@ def get_web_context(query):
                         f"Date: {r.get('date', 'N/A')}\n"
                         f"Details: {r['body']}\n\n"
                     )
+                    # Add to raw list for API response
+                    raw_results.append({
+                        "type": "news",
+                        "title": r['title'],
+                        "link": r['url'],
+                        "date": r.get('date', 'N/A'),
+                        "snippet": r['body']
+                    })
 
         if not context_text:
-            return "No web results found."
+            return [], "No web results found."
             
-        return context_text.strip()
+        return raw_results, context_text.strip()
 
     except Exception as e:
         print(f"Search Error: {e}")
-        return "Failed to retrieve web search results."
+        return [], "Failed to retrieve web search results."
 
 @app.route('/chat', methods=['GET', 'POST'])
 def chat():
@@ -97,6 +113,8 @@ def chat():
 
     final_user_content = user_prompt
     search_query_used = None
+    # Initialize list to show user what was found
+    found_web_results = [] 
 
     # --- SMART WEB SEARCH LOGIC ---
     if web_search:
@@ -116,17 +134,17 @@ def chat():
                 search_query_used = generated_query
                 print(f"Step 2: AI generated query -> {generated_query}")
 
-                # Step B: Perform Web Search (Now includes News + Details)
-                print("Step 3: Searching DuckDuckGo (Text + News)...")
-                search_results = get_web_context(generated_query)
+                # Step B: Perform Web Search
+                print("Step 3: Searching DuckDuckGo...")
+                # Unpack both raw list and context text
+                found_web_results, search_results = get_web_context(generated_query)
 
                 # Step C: Construct Final Prompt
                 final_user_content = (
                     f"User Question: {user_prompt}\n\n"
                     f"Here are the web search results for '{generated_query}':\n"
                     f"{search_results}\n\n"
-                    f"Please answer the User Question using the details provided above. "
-                    f"If sources are provided, mention them if relevant."
+                    f"Please answer the User Question using the details provided above."
                 )
             else:
                 print("Failed to generate query, proceeding without search.")
@@ -178,6 +196,8 @@ def chat():
                 "status": "success",
                 "web_search_enabled": web_search,
                 "search_query_used": search_query_used,
+                # NEW: Show the actual results found here
+                "web_search_results": found_web_results, 
                 "response": {
                     "Model": "M.H.M Ai",
                     "Response": ai_message
